@@ -29,7 +29,8 @@ else
 fi
 
 TABLES=("$ACPI_DIR/dsdt.dat")
-while IFS= read -r f; do TABLES+=("$f"); done < <(ls "$ACPI_DIR"/ssdt*.dat 2>/dev/null | sort -V)
+while IFS= read -r f; do TABLES+=("$f"); done \
+    < <(find "$ACPI_DIR" -maxdepth 1 -name 'ssdt*.dat' 2>/dev/null | sort -V)
 
 echo "[2/3] 表数量： ${#TABLES[@]}"
 echo "[3/3] 离线执行测试"

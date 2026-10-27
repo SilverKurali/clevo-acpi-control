@@ -1,0 +1,40 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck (bash)
+        run: |
+          shellcheck --version
+          shellcheck install.sh src/clevo tools/offline-test.sh
+
+      - name: Python syntax and lint
+        run: |
+          python3 -m pip install --quiet pyflakes
+          python3 -m py_compile src/clevo-acpi-control src/clevo-profile-sync
+          python3 -m pyflakes src/clevo-acpi-control src/clevo-profile-sync
+
+      - name: Desktop entry
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y desktop-file-utils
+          desktop-file-validate desktop/clevo-acpi-control.desktop
+
+      - name: systemd units parse
+        run: |
+          set -e
+          for f in systemd/*.service; do
+            echo "--- $f"
+            # --no-pager + verify; missing vendor units on the runner are expected
+            systemd-analyze verify "$f" 2>&1 | grep -vE 'Cannot add dependency|Failed to (load|find)' || true
+          done
+          echo "units parsed"
