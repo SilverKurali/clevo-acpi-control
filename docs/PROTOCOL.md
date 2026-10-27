@@ -628,3 +628,55 @@ If ((ToInteger (Arg1) == 0x79))
 - `nvidia-powerd` 的 `ERROR! ... disable Dynamic Boost DC controller`
   是**开机时**打的日志（DC = 电池），插电后不影响；该服务不会重新评估。
 - 切换后无需重启任何服务，`nvidia-smi` 立即反映新的 `Current Power Limit`。
+
+---
+
+## 17. 风扇转速：ACPI 不提供，只能读 EC
+
+### 17.1 ACPI 侧完全没有风扇接口
+
+全 DSDT 搜索 `_FST` / `_FSL` / `_FIF` / `FAN` / `RPM` 等名字，**零结果**。
+唯一的散热相关对象是：
+
+```asl
+ThermalZone (TZ0)
+{
+    Method (_TMP, 0, Serialized) { ... }   // 只有温度
+}
+```
+
+⇒ 风扇转速无法通过 `acpi_call` 获取。
+
+### 17.2 内核已导出 `ec_read()`
+
+```
+$ grep -E ' (ec_read|ec_write)$' /proc/kallsyms
+ffffffff9ed68390 T ec_read
+ffffffff9ed68450 T ec_write
+```
+
+所以不必编译完整的 `ec_sys`，一个调用 `ec_read()` 的小模块即可读 EC。
+见 `kmod/ec_dump.c`。
+
+### 17.3 实测：哪些寄存器跟随风扇
+
+对比「冷机」与「16 线程满载 45 秒」：
+
+| 寄存器 | 冷 | 热 | Δ |
+|---|---|---|---|
+| `0xCE` | 138 | 204 | +66 |
+| `0xCF` | 124 | 204 | +80 |
+| `0xD1` | 0 | 128 | +128 |
+| `0xD3` | 66 | 140 | +74 |
+| `0x07` | 55 | 72 | +17 |
+
+**编码未确定。** `0xCE`/`0xCF` 满载时同时饱和到 `204`，更像两个独立的占空比寄存器，
+而不是 16 位 RPM 值。社区记载的 Clevo 约定（`0xCE/0xCF` = CPU 风扇 RPM）
+**与本机实测不符** —— 这台机器的 EC 映射与老款 Clevo 不同。
+
+⇒ 本项目**不提供风扇转速读数**，避免给出错误数据。
+
+### 17.4 满载测试的附带结论
+
+16 线程满载 60 秒，封装温度稳定在 **74–76 °C**（性能档，PL1 90 W）。
+说明散热模组在 90 W 下仍有余量，未触及 100 °C 的 TJmax。
