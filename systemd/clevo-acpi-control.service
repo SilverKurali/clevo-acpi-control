@@ -1,0 +1,15 @@
+[Unit]
+Description=Clevo/Tongfang ACPI performance mode
+Documentation=https://github.com/SilverKurali/clevo-acpi-control
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# 从 /etc/clevo-acpi-control.conf 读取模式，默认 performance
+EnvironmentFile=-/etc/clevo-acpi-control.conf
+ExecStartPre=/sbin/modprobe acpi_call
+ExecStart=/usr/local/bin/clevo-acpi-control set ${MODE:-performance}
+
+[Install]
+WantedBy=multi-user.target

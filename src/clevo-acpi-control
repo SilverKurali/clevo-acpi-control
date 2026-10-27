@@ -1,0 +1,293 @@
+#!/usr/bin/env python3
+"""
+clevo-acpi-control — 通过 ACPI 控制 Clevo/Tongfang 笔记本的性能模式
+
+走的是厂商自己的 ACPI 接口（\\_SB.WMI.SCMD 命令 0x19），
+与 Windows 控制中心同一条路径。不碰固件、不改 vBIOS。
+
+协议细节见 docs/PROTOCOL.md
+"""
+
+import os
+import re
+import sys
+import argparse
+
+ACPI_CALL = "/proc/acpi/call"
+
+# 候选 SCMD 路径，按优先级尝试
+SCMD_CANDIDATES = ["\\_SB.WMI.SCMD", "\\_SB.DCHU.SCMD"]
+
+# 只读探测用的已知命令（返回值 == 命令号）
+PROBE_CMD = 0x14
+
+MODES = {
+    "quiet":         (0, "安静"),
+    "saving":        (1, "省电"),
+    "performance":   (2, "性能"),
+    "entertainment": (3, "娱乐"),
+}
+MODE_BY_ID = {v[0]: k for k, v in MODES.items()}
+
+# 命令 0x79 是"扩展命令"入口，高字节为子命令，低 24 位为数据：
+#   ARGS = (子命令 << 24) | 数据
+# 性能模式 = 子命令 0x19 + 模式值 0..3
+CMD_EXT     = 0x79
+SUB_SET_MODE = 0x19
+CMD_GET_PSF4 = 0x60   # GCMD，不是 SCMD
+
+
+class AcpiError(Exception):
+    pass
+
+
+def need_root():
+    if os.geteuid() != 0:
+        sys.exit("需要 root 权限：sudo %s %s" % (sys.argv[0], " ".join(sys.argv[1:])))
+
+
+def acpi_call(path, *args):
+    """调用一个 ACPI 方法，返回原始字符串结果。"""
+    if not os.path.exists(ACPI_CALL):
+        raise AcpiError("找不到 %s —— acpi_call 模块未加载。\n"
+                        "  安装后执行： sudo modprobe acpi_call\n"
+                        "  Fedora: https://github.com/MiMillieuh/acpi_call-fedora" % ACPI_CALL)
+    expr = "%s %s" % (path, " ".join(str(a) for a in args))
+    try:
+        with open(ACPI_CALL, "w") as f:
+            f.write(expr)
+        with open(ACPI_CALL) as f:
+            return f.read().strip()
+    except OSError as e:
+        raise AcpiError("写入 %s 失败: %s" % (ACPI_CALL, e))
+
+
+def parse_int(raw):
+    """从 acpi_call 的返回里取出整数。
+
+    /proc/acpi/call 的返回格式是 "<结果>\\0called\\0" —— 结果在第一个 NUL 之前，
+    之后是上一次写入残留的字符串，必须截断，否则会把 "called" 里的 ca/led
+    当成十六进制数字读进来。
+    """
+    val = raw.split("\x00")[0].strip()
+    m = re.match(r"^0x([0-9a-fA-F]+)$", val)
+    if m:
+        return int(m.group(1), 16)
+    m = re.match(r"^(\d+)$", val)
+    if m:
+        return int(m.group(1))
+    return None
+
+
+# 可读的 ACPI 变量（只读，零风险）
+VARS = {
+    "CPCM":  "\\_SB.PC00.LPCB.EC.CPCM",      # 当前性能档
+    "NTCF":  "\\_SB.PC00.PEG1.PEGP.NTCF",    # 各档的授权位掩码
+    "CTGP":  "\\_SB.NPCF.CTGP",              # 基础 TGP 授权
+    "DTGP":  "\\_SB.NPCF.DTGP",              # Dynamic Boost
+    "DBAC":  "\\_SB.NPCF.DBAC",
+    "DBDC":  "\\_SB.NPCF.DBDC",
+}
+
+NTCF_FIELDS = [
+    (0, "CTGP", "基础 TGP 提升"),
+    (4, "DTGP", "Dynamic Boost"),
+    (8, "DBAC", "DB 交流"),
+    (12, "DBDC", "DB 直流"),
+]
+
+
+def read_var(path):
+    """读一个 ACPI 变量。失败返回 None。"""
+    try:
+        return parse_int(acpi_call(path))
+    except AcpiError:
+        return None
+
+
+def decode_ntcf(ntcf):
+    """把 NTCF 拆成四个半字节，返回 [(名称, 说明, 启用的档位列表)]。"""
+    out = []
+    for shift, name, desc in NTCF_FIELDS:
+        nib = (ntcf >> shift) & 0xF
+        modes = [MODE_BY_ID[b] for b in range(4) if (nib >> b) & 1]
+        out.append((name, desc, nib, modes))
+    return out
+
+
+def detect_scmd():
+    """找出可用的 SCMD 路径，并验证调用约定。"""
+    for path in SCMD_CANDIDATES:
+        try:
+            raw = acpi_call(path, 0, PROBE_CMD, 0)
+        except AcpiError:
+            raise
+        val = parse_int(raw)
+        if val == PROBE_CMD:
+            return path, raw
+    raise AcpiError("没找到可用的 SCMD 接口。\n"
+                    "  这台机器可能不是 Clevo/Tongfang 系，或固件版本不兼容。")
+
+
+def read_psf4():
+    """只读：通过 GCMD 0x60 读 PSF4。失败返回 None。"""
+    for base in ("\\_SB.WMI", "\\_SB.DCHU"):
+        try:
+            raw = acpi_call(base + ".GCMD", 0, CMD_GET_PSF4, 0)
+            return parse_int(raw)
+        except AcpiError:
+            continue
+    return None
+
+
+def cmd_status(args):
+    need_root()
+    print("clevo-acpi-control — 状态\n")
+
+    path, _ = detect_scmd()
+    print("  SCMD 接口       : %s" % path)
+
+    # --- 固件能力门禁 ---
+    psf4 = read_psf4()
+    if psf4 is None:
+        print("  PSF4            : 读取失败")
+        gate = None
+    else:
+        gate = bool(psf4 & 0x04)
+        print("  PSF4            : 0x%08X" % psf4)
+        print("  设置能力        : %s" % ("✅ 已启用" if gate else "❌ 被固件禁用"))
+
+    # --- 当前档位 ---
+    cpcm = read_var(VARS["CPCM"])
+    if cpcm is None:
+        print("\n  当前固件档位    : 读取失败")
+    else:
+        name = MODE_BY_ID.get(cpcm, "未知")
+        label = MODES.get(name, (None, "?"))[1]
+        print("\n  当前固件档位    : %d (%s / %s)" % (cpcm, name, label))
+
+    # --- 授权位掩码 ---
+    ntcf = read_var(VARS["NTCF"])
+    if ntcf is not None:
+        print("  NTCF            : 0x%04X" % ntcf)
+        print("\n  各档能启用什么：")
+        for name, desc, nib, modes in decode_ntcf(ntcf):
+            shown = ", ".join(modes) if modes else "（无）"
+            print("    %-6s %-14s 掩码 0x%X → %s" % (name, desc, nib, shown))
+
+    # --- 当前授权状态 ---
+    print("\n  当前 GPU 授权状态：")
+    for key in ("CTGP", "DTGP", "DBAC", "DBDC"):
+        v = read_var(VARS[key])
+        mark = "✅ 已授权" if v else ("❌ 未授权" if v == 0 else "?")
+        print("    %-6s = %s   %s" % (key, "读取失败" if v is None else "0x%X" % v, mark))
+
+    # --- 结论 ---
+    print("\n  " + "-" * 46)
+    if gate is False:
+        print("  结论：本机固件未启用性能档设置功能。")
+        print("        · 无法通过 ACPI 切换档位")
+        print("        · 无法解锁 GPU 的 TGP / Dynamic Boost")
+        print("        · 但可以读取当前状态（本工具已支持）")
+    elif gate is True:
+        print("  结论：本机支持设置性能档。")
+        print("        可执行： sudo %s set performance" % sys.argv[0])
+    if ntcf is not None and cpcm is not None:
+        # 检查当前档位是否启用了 TGP 相关授权
+        want = ((ntcf >> 0) & 0xF) >> cpcm & 1
+        have = read_var(VARS["CTGP"])
+        if want and have == 0:
+            print("  ⚠️  不一致：当前档位本应启用 CTGP，但实际未授权")
+        elif want and have:
+            print("  ✅ 当前档位已启用 CTGP（基础 TGP 提升）")
+    print("  " + "-" * 46)
+    return 0
+
+
+def cmd_set(args):
+    need_root()
+    if args.mode not in MODES:
+        sys.exit("未知模式 %r。可用：%s" % (args.mode, ", ".join(MODES)))
+    mid, label = MODES[args.mode]
+
+    path, raw = detect_scmd()
+    print("SCMD 接口 : %s  (探针返回 %s)" % (path, raw))
+
+    psf4 = read_psf4()
+    if psf4 is not None:
+        print("PSF4      : 0x%08X   能力门禁 %s" %
+              (psf4, "已启用" if psf4 & 0x04 else "未启用"))
+        if not (psf4 & 0x04) and not args.force:
+            sys.exit("\n⚠️  PSF4 的 0x04 位未置位，固件会跳过命令 0x19。\n"
+                     "    确认要试的话加 --force。")
+
+    args_val = (SUB_SET_MODE << 24) | mid
+    print("\n即将执行： %s 0 0x%02X 0x%08X   (%s / %s)" %
+          (path, CMD_EXT, args_val, args.mode, label))
+    if args.dry_run:
+        print("--dry-run：未执行。")
+        return 0
+
+    result = acpi_call(path, 0, CMD_EXT, args_val)
+    print("返回      : %s" % result)
+
+    val = parse_int(result)
+    if val == 0xFFFFFFFFFFFFFFFF:
+        print("\n⚠️  返回 Ones —— 命令未被处理。可能原因：")
+        print("    · PSF4 & 0x04 未置位（固件不支持）")
+        print("    · 模式值超出 0..3")
+        print("    · EC 未就绪（ECOK 为假）")
+        return 1
+
+    print("\n✅ 命令已下发。验证方式：")
+    print("    nvidia-smi -q -d POWER | grep -A2 'Power Limit'")
+    print("    journalctl -u nvidia-powerd -n 5   # 看 ERROR 是否消失")
+    print("    观察风扇转速是否随之变化")
+    return 0
+
+
+def cmd_probe(args):
+    need_root()
+    path, _ = detect_scmd()
+    print("SCMD 接口 : %s\n" % path)
+    print("只读探测（不改变任何状态）：\n")
+    for cid in (0x13, 0x14, 0x1D, 0x1F, 0x52, 0x60, 0x7A):
+        for base in ("\\_SB.WMI", "\\_SB.DCHU"):
+            try:
+                raw = acpi_call(base + ".GCMD", 0, cid, 0)
+                print("  %-12s GCMD 0x%02X → %s" % (base.split(".")[-1], cid, raw))
+            except AcpiError:
+                break
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="通过 ACPI 控制 Clevo/Tongfang 笔记本性能模式",
+        epilog="示例： sudo %(prog)s status    |    sudo %(prog)s set performance")
+    sub = ap.add_subparsers(dest="cmd")
+
+    p_status = sub.add_parser("status", help="显示当前状态（只读）")
+    p_status.set_defaults(func=cmd_status)
+
+    p_set = sub.add_parser("set", help="设置性能模式")
+    p_set.add_argument("mode", help="quiet | saving | performance | entertainment")
+    p_set.add_argument("--dry-run", action="store_true", help="只显示将要执行的内容")
+    p_set.add_argument("--force", action="store_true", help="即使能力门禁未启用也尝试")
+    p_set.set_defaults(func=cmd_set)
+
+    p_probe = sub.add_parser("probe", help="只读探测所有已知命令（零风险）")
+    p_probe.set_defaults(func=cmd_probe)
+
+    args = ap.parse_args()
+    if not getattr(args, "func", None):
+        ap.print_help()
+        return 1
+    try:
+        return args.func(args)
+    except AcpiError as e:
+        sys.exit("错误：%s" % e)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

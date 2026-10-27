@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Clevo 性能控制
+Name[en]=Clevo Performance Control
+GenericName=性能档位切换
+Comment=切换笔记本性能档位（风扇、CPU、显卡功耗）
+Comment[en]=Switch laptop performance profile (fan, CPU, GPU power)
+Exec=clevo
+Terminal=true
+Icon=utilities-system-monitor
+Categories=System;
+Keywords=performance;fan;power;clevo;tongfang;性能;风扇;功耗;
+StartupNotify=true

@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+build/
+dist/
+*.egg-info/
+.acpi-cache/
+*.ko
+*.o
+*.mod
+*.mod.c

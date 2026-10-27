@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# clevo — 中文交互菜单（小白版）
+#
+# 用法：直接运行 clevo
+# 会自动请求管理员权限（改硬件需要）
+
+set -uo pipefail
+
+TOOL="${CLEVO_TOOL:-/usr/local/bin/clevo-acpi-control}"
+MODULE="acpi_call"
+
+# ---------- 自动提权 ----------
+if [ "$(id -u)" -ne 0 ]; then
+    exec sudo -- "$0" "$@"
+fi
+
+# ---------- 依赖检查 ----------
+if ! [ -e /proc/acpi/call ]; then
+    if modprobe "$MODULE" 2>/dev/null && [ -e /proc/acpi/call ]; then
+        :
+    else
+        echo
+        echo "  ✗ 内核模块 acpi_call 没有加载成功。"
+        echo "    请先运行安装脚本： sudo ./install.sh"
+        echo
+        read -rp "  按回车退出..." _
+        exit 1
+    fi
+fi
+
+if ! [ -x "$TOOL" ]; then
+    echo "  ✗ 找不到 $TOOL，请先运行 sudo ./install.sh"
+    read -rp "  按回车退出..." _
+    exit 1
+fi
+
+# ---------- 读状态 ----------
+read_state() {
+    CUR_RAW=$("$TOOL" status 2>/dev/null | tr -d '\0')
+    CUR_MODE=$(printf '%s\n' "$CUR_RAW" | sed -n 's/.*当前固件档位 *: \([0-9]\).*/\1/p' | head -1)
+    [ -z "${CUR_MODE:-}" ] && CUR_MODE=9
+    CPU_PL1=$(awk '{printf "%d", $1/1000000}' \
+        /sys/class/powercap/intel-rapl/intel-rapl:0/constraint_0_power_limit_uw 2>/dev/null)
+    [ -z "${CPU_PL1:-}" ] && CPU_PL1="?"
+    GPU_PL=$(nvidia-smi -q -d POWER 2>/dev/null \
+        | grep -m1 'Current Power Limit' | awk '{printf "%d", $5}')
+    [ -z "${GPU_PL:-}" ] && GPU_PL="?"
+    AC=$(cat /sys/class/power_supply/AC/online 2>/dev/null)
+    BAT=$(cat /sys/class/power_supply/BAT0/capacity 2>/dev/null)
+}
+
+mode_name() {
+    case "$1" in
+        0) echo "安静" ;;
+        1) echo "省电" ;;
+        2) echo "性能" ;;
+        3) echo "娱乐（平衡）" ;;
+        *) echo "未知" ;;
+    esac
+}
+
+# ---------- 菜单 ----------
+draw_menu() {
+    read_state
+    clear
+    echo
+    echo "  ╔══════════════════════════════════════════╗"
+    echo "  ║          Clevo 性能控制                  ║"
+    echo "  ╚══════════════════════════════════════════╝"
+    echo
+    if [ "${AC:-0}" = "1" ]; then
+        echo "     电源：已插电    电量：${BAT:-?}%"
+    else
+        echo "     电源：电池供电  电量：${BAT:-?}%"
+        echo "     ⚠  电池模式下显卡被限制在 35W，切档看不出效果"
+    fi
+    echo
+    echo "     当前档位：$(mode_name "$CUR_MODE")"
+    echo "     CPU 功耗上限：${CPU_PL1} W"
+    echo "     显卡功耗上限：${GPU_PL} W"
+    echo
+    echo "  ──────────────────────────────────────────"
+    echo
+    echo "    1)  性能      CPU 90W / 显卡 115W   游戏、渲染"
+    echo "    2)  平衡      CPU 45W / 显卡  85W   日常使用"
+    echo "    3)  节能      CPU 15W / 显卡  85W   外出、省电"
+    echo
+    echo "    5)  查看详细信息"
+    echo "    0)  退出"
+    echo
+}
+
+apply_mode() {
+    local m="$1" name="$2"
+    echo
+    if ! "$TOOL" set "$m" >/dev/null 2>&1; then
+        echo "  ✗ 切换失败。可能是这台机器不支持（固件门禁未开）。"
+        read -rp "  按回车返回..." _
+        return
+    fi
+    sleep 1
+    read_state
+    echo "  ✓ 已切换到「${name}」"
+    echo "    CPU 功耗上限：${CPU_PL1} W"
+    echo "    显卡功耗上限：${GPU_PL} W"
+    echo
+    read -rp "  按回车返回菜单..." _
+}
+
+while true; do
+    draw_menu
+    if ! read -rp "  请输入数字后回车 [0-5]：" choice; then clear; exit 0; fi
+    case "$choice" in
+        1) apply_mode performance   "性能" ;;
+        2) apply_mode entertainment "平衡" ;;
+        3) apply_mode quiet         "节能" ;;
+        5) echo; "$TOOL" status | tr -d '\0'; echo; read -rp "  按回车返回..." _ ;;
+        0) clear; echo; echo "  已退出。"; echo; exit 0 ;;
+        *) ;;
+    esac
+done
