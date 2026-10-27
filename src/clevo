@@ -1,43 +1,147 @@
 #!/usr/bin/env bash
-# clevo — 中文交互菜单（小白版）
+# clevo — interactive performance profile menu (bilingual)
 #
-# 用法：直接运行 clevo
-# 会自动请求管理员权限（改硬件需要）
+# Language follows the system locale; override with --lang zh|en
+#
+# Usage:  clevo [--lang zh|en]
 
 set -uo pipefail
 
 TOOL="${CLEVO_TOOL:-/usr/local/bin/clevo-acpi-control}"
 MODULE="acpi_call"
 
-# ---------- 自动提权 ----------
+# ─────────────────────────── 语言 ───────────────────────────
+detect_lang() {
+    case "${1:-}" in
+        zh|en) echo "$1"; return ;;
+    esac
+    local l="${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}"
+    case "$l" in
+        zh*) echo zh ;;
+        *)   echo en ;;
+    esac
+}
+
+LANG_OVERRIDE=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --lang) LANG_OVERRIDE="${2:-}"; shift 2 ;;
+        --lang=*) LANG_OVERRIDE="${1#*=}"; shift ;;
+        -h|--help)
+            echo "Usage: clevo [--lang zh|en]"
+            echo "  切换笔记本性能档位 / Switch laptop performance profile"
+            exit 0 ;;
+        *) shift ;;
+    esac
+done
+
+# 需要 root 才能读 LANG（sudo 会重置环境），所以先取出来
+REAL_LANG="${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}"
+
+# ─────────────────────────── 自动提权 ───────────────────────────
 if [ "$(id -u)" -ne 0 ]; then
-    exec sudo -- "$0" "$@"
+    extra=()
+    [ -n "$LANG_OVERRIDE" ] && extra=(--lang "$LANG_OVERRIDE")
+    exec sudo LANG="$REAL_LANG" "$0" "${extra[@]}"
 fi
 
-# ---------- 依赖检查 ----------
-if ! [ -e /proc/acpi/call ]; then
-    if modprobe "$MODULE" 2>/dev/null && [ -e /proc/acpi/call ]; then
-        :
+LANG_CODE=$(detect_lang "$LANG_OVERRIDE")
+
+# ─────────────────────────── 文案 ───────────────────────────
+t() {
+    local k="$1"
+    if [ "$LANG_CODE" = "zh" ]; then
+        case "$k" in
+            title)      echo "Clevo 性能控制" ;;
+            ac)         echo "已插电" ;;
+            battery)    echo "电池供电" ;;
+            warn_bat)   echo "⚠  电池模式下显卡被限制在 35W，切档看不出效果" ;;
+            power)      echo "电源" ;;
+            batt_lvl)   echo "电量" ;;
+            cur_profile) echo "当前档位" ;;
+            cpu_lim)    echo "CPU 功耗上限" ;;
+            gpu_lim)    echo "显卡功耗上限" ;;
+            m1)         echo "性能      CPU 90W / 显卡 115W   游戏、渲染" ;;
+            m2)         echo "平衡      CPU 45W / 显卡  85W   日常使用" ;;
+            m3)         echo "节能      CPU 15W / 显卡  85W   外出、省电" ;;
+            details)    echo "查看详细信息" ;;
+            quit)       echo "退出" ;;
+            prompt)     echo "请输入数字后回车 [0-5]：" ;;
+            switched)   echo "✓ 已切换到" ;;
+            failed)     echo "✗ 切换失败。可能是这台机器不支持（固件门禁未开）。" ;;
+            back)       echo "按回车返回菜单..." ;;
+            back2)      echo "按回车返回..." ;;
+            bye)        echo "已退出。" ;;
+            no_mod)     echo "内核模块 acpi_call 没有加载成功。" ;;
+            no_mod2)    echo "请先运行安装脚本： sudo ./install.sh" ;;
+            no_tool)    echo "找不到" ;;
+            no_tool2)   echo "请先运行 sudo ./install.sh" ;;
+            press)      echo "按回车退出..." ;;
+            p_quiet)    echo "安静" ;;
+            p_saving)   echo "省电" ;;
+            p_perf)     echo "性能" ;;
+            p_ent)      echo "娱乐（平衡）" ;;
+            p_unk)      echo "未知" ;;
+        esac
     else
+        case "$k" in
+            title)      echo "Clevo Performance Control" ;;
+            ac)         echo "AC power" ;;
+            battery)    echo "on battery" ;;
+            warn_bat)   echo "!  On battery the GPU is capped at 35W - profile changes have no visible effect" ;;
+            power)      echo "Power" ;;
+            batt_lvl)   echo "Battery" ;;
+            cur_profile) echo "Current profile" ;;
+            cpu_lim)    echo "CPU power limit" ;;
+            gpu_lim)    echo "GPU power limit" ;;
+            m1)         echo "Performance   CPU 90W / GPU 115W   gaming, rendering" ;;
+            m2)         echo "Balanced      CPU 45W / GPU  85W   everyday use" ;;
+            m3)         echo "Power Saver   CPU 15W / GPU  85W   on battery" ;;
+            details)    echo "Show details" ;;
+            quit)       echo "Exit" ;;
+            prompt)     echo "Enter a number [0-5]: " ;;
+            switched)   echo "OK, switched to" ;;
+            failed)     echo "FAILED. This machine may not support it (firmware gate closed)." ;;
+            back)       echo "Press Enter to return to the menu..." ;;
+            back2)      echo "Press Enter to return..." ;;
+            bye)        echo "Bye." ;;
+            no_mod)     echo "Kernel module acpi_call is not loaded." ;;
+            no_mod2)    echo "Run the installer first: sudo ./install.sh" ;;
+            no_tool)    echo "Not found:" ;;
+            no_tool2)   echo "Run the installer first: sudo ./install.sh" ;;
+            press)      echo "Press Enter to exit..." ;;
+            p_quiet)    echo "quiet" ;;
+            p_saving)   echo "saving" ;;
+            p_perf)     echo "performance" ;;
+            p_ent)      echo "entertainment (balanced)" ;;
+            p_unk)      echo "unknown" ;;
+        esac
+    fi
+}
+
+# ─────────────────────────── 依赖检查 ───────────────────────────
+if ! [ -e /proc/acpi/call ]; then
+    if ! { modprobe "$MODULE" 2>/dev/null && [ -e /proc/acpi/call ]; }; then
         echo
-        echo "  ✗ 内核模块 acpi_call 没有加载成功。"
-        echo "    请先运行安装脚本： sudo ./install.sh"
+        echo "  $(t no_mod)"
+        echo "  $(t no_mod2)"
         echo
-        read -rp "  按回车退出..." _
+        read -rp "  $(t press)" _
         exit 1
     fi
 fi
 
 if ! [ -x "$TOOL" ]; then
-    echo "  ✗ 找不到 $TOOL，请先运行 sudo ./install.sh"
-    read -rp "  按回车退出..." _
+    echo "  $(t no_tool) $TOOL"
+    echo "  $(t no_tool2)"
+    read -rp "  $(t press)" _
     exit 1
 fi
 
-# ---------- 读状态 ----------
+# ─────────────────────────── 状态读取 ───────────────────────────
 read_state() {
     CUR_RAW=$("$TOOL" status 2>/dev/null | tr -d '\0')
-    CUR_MODE=$(printf '%s\n' "$CUR_RAW" | sed -n 's/.*当前固件档位 *: \([0-9]\).*/\1/p' | head -1)
+    CUR_MODE=$(printf '%s\n' "$CUR_RAW" | sed -n 's/.*: \([0-9]\) (.*/\1/p' | head -1)
     [ -z "${CUR_MODE:-}" ] && CUR_MODE=9
     CPU_PL1=$(awk '{printf "%d", $1/1000000}' \
         /sys/class/powercap/intel-rapl/intel-rapl:0/constraint_0_power_limit_uw 2>/dev/null)
@@ -49,73 +153,73 @@ read_state() {
     BAT=$(cat /sys/class/power_supply/BAT0/capacity 2>/dev/null)
 }
 
-mode_name() {
+profile_name() {
     case "$1" in
-        0) echo "安静" ;;
-        1) echo "省电" ;;
-        2) echo "性能" ;;
-        3) echo "娱乐（平衡）" ;;
-        *) echo "未知" ;;
+        0) t p_quiet ;;
+        1) t p_saving ;;
+        2) t p_perf ;;
+        3) t p_ent ;;
+        *) t p_unk ;;
     esac
 }
 
-# ---------- 菜单 ----------
+# ─────────────────────────── 菜单 ───────────────────────────
 draw_menu() {
     read_state
     clear
     echo
-    echo "  ╔══════════════════════════════════════════╗"
-    echo "  ║          Clevo 性能控制                  ║"
-    echo "  ╚══════════════════════════════════════════╝"
+    echo "  ══════════════════════════════════════════════════"
+    echo "     $(t title)"
+    echo "  ══════════════════════════════════════════════════"
     echo
     if [ "${AC:-0}" = "1" ]; then
-        echo "     电源：已插电    电量：${BAT:-?}%"
+        echo "     $(t power): $(t ac)      $(t batt_lvl): ${BAT:-?}%"
     else
-        echo "     电源：电池供电  电量：${BAT:-?}%"
-        echo "     ⚠  电池模式下显卡被限制在 35W，切档看不出效果"
+        echo "     $(t power): $(t battery)   $(t batt_lvl): ${BAT:-?}%"
+        echo "     $(t warn_bat)"
     fi
     echo
-    echo "     当前档位：$(mode_name "$CUR_MODE")"
-    echo "     CPU 功耗上限：${CPU_PL1} W"
-    echo "     显卡功耗上限：${GPU_PL} W"
+    echo "     $(t cur_profile): $(profile_name "$CUR_MODE")"
+    echo "     $(t cpu_lim): ${CPU_PL1} W"
+    echo "     $(t gpu_lim): ${GPU_PL} W"
     echo
-    echo "  ──────────────────────────────────────────"
+    echo "  ──────────────────────────────────────────────────"
     echo
-    echo "    1)  性能      CPU 90W / 显卡 115W   游戏、渲染"
-    echo "    2)  平衡      CPU 45W / 显卡  85W   日常使用"
-    echo "    3)  节能      CPU 15W / 显卡  85W   外出、省电"
+    echo "    1)  $(t m1)"
+    echo "    2)  $(t m2)"
+    echo "    3)  $(t m3)"
     echo
-    echo "    5)  查看详细信息"
-    echo "    0)  退出"
+    echo "    5)  $(t details)"
+    echo "    0)  $(t quit)"
     echo
 }
 
 apply_mode() {
-    local m="$1" name="$2"
+    local m="$1" label="$2"
     echo
     if ! "$TOOL" set "$m" >/dev/null 2>&1; then
-        echo "  ✗ 切换失败。可能是这台机器不支持（固件门禁未开）。"
-        read -rp "  按回车返回..." _
+        echo "  $(t failed)"
+        read -rp "  $(t back2)" _
         return
     fi
     sleep 1
     read_state
-    echo "  ✓ 已切换到「${name}」"
-    echo "    CPU 功耗上限：${CPU_PL1} W"
-    echo "    显卡功耗上限：${GPU_PL} W"
+    echo "  $(t switched) 「${label}」"
+    echo "    $(t cpu_lim): ${CPU_PL1} W"
+    echo "    $(t gpu_lim): ${GPU_PL} W"
     echo
-    read -rp "  按回车返回菜单..." _
+    read -rp "  $(t back)" _
 }
 
 while true; do
     draw_menu
-    if ! read -rp "  请输入数字后回车 [0-5]：" choice; then clear; exit 0; fi
+    if ! read -rp "  $(t prompt)" choice; then clear; exit 0; fi
     case "$choice" in
-        1) apply_mode performance   "性能" ;;
-        2) apply_mode entertainment "平衡" ;;
-        3) apply_mode quiet         "节能" ;;
-        5) echo; "$TOOL" status | tr -d '\0'; echo; read -rp "  按回车返回..." _ ;;
-        0) clear; echo; echo "  已退出。"; echo; exit 0 ;;
+        1) apply_mode performance   "$(t p_perf)" ;;
+        2) apply_mode entertainment "$(t p_ent)" ;;
+        3) apply_mode quiet         "$(t p_quiet)" ;;
+        5) echo; "$TOOL" status | tr -d '\0'; echo; read -rp "  $(t back2)" _ ;;
+        0) clear; echo; echo "  $(t bye)"; echo; exit 0 ;;
         *) ;;
     esac
 done
