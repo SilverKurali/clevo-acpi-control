@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""
+clevo-profile-sync — keep the firmware performance profile in sync with
+the desktop's power mode.
+
+Listens to net.hadess.PowerProfiles (provided by power-profiles-daemon or
+tuned-ppd) and applies the matching Clevo/Tongfang firmware profile.
+
+Mapping (from measured CPU PL1 / GPU power limits):
+
+    power-saver  ->  quiet          (15 W / 85 W)
+    balanced     ->  entertainment  (45 W / 85 W)
+    performance  ->  performance    (90 W / 115 W)
+
+So the user only touches one switch: the desktop's power mode.
+
+Config: /etc/clevo-acpi-control.conf
+    PROFILE_POWER_SAVER=quiet
+    PROFILE_BALANCED=entertainment
+    PROFILE_PERFORMANCE=performance
+"""
+
+import os
+import subprocess
+import sys
+
+import dbus
+import dbus.mainloop.glib
+from gi.repository import GLib
+
+TOOL = os.environ.get("CLEVO_TOOL", "/usr/local/bin/clevo-acpi-control")
+CONF = os.environ.get("CLEVO_CONF", "/etc/clevo-acpi-control.conf")
+
+BUS_NAME = "net.hadess.PowerProfiles"
+OBJ_PATH = "/net/hadess/PowerProfiles"
+IFACE = "net.hadess.PowerProfiles"
+
+DEFAULT_MAP = {
+    "power-saver": "quiet",
+    "balanced": "entertainment",
+    "performance": "performance",
+}
+
+VALID_MODES = {"quiet", "saving", "performance", "entertainment"}
+
+# 中文/英文日志都简短，跟 LANG 走
+def log(msg):
+    print(msg, flush=True)
+
+
+def load_map():
+    """读配置文件里的 PROFILE_* 覆盖项。"""
+    mapping = dict(DEFAULT_MAP)
+    try:
+        with open(CONF) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k, v = k.strip(), v.strip()
+                key = {
+                    "PROFILE_POWER_SAVER": "power-saver",
+                    "PROFILE_BALANCED": "balanced",
+                    "PROFILE_PERFORMANCE": "performance",
+                }.get(k)
+                if key and v in VALID_MODES:
+                    mapping[key] = v
+    except OSError:
+        pass
+    return mapping
+
+
+MAPPING = load_map()
+_last = None
+
+
+def apply_profile(desktop_profile):
+    """把桌面电源模式翻译成固件档位并下发。"""
+    global _last
+    mode = MAPPING.get(desktop_profile)
+    if mode is None:
+        log("skip: unknown desktop profile %r" % desktop_profile)
+        return
+    if mode == _last:
+        return
+    try:
+        r = subprocess.run([TOOL, "set", mode], capture_output=True, text=True, timeout=20)
+        if r.returncode == 0:
+            _last = mode
+            log("ok: %s -> %s" % (desktop_profile, mode))
+        else:
+            err = (r.stderr or r.stdout).strip().splitlines()
+            log("fail: %s -> %s: %s" % (desktop_profile, mode, err[-1] if err else "?"))
+    except Exception as e:
+        log("error: %s" % e)
+
+
+def on_properties_changed(interface, changed, invalidated, path=None):
+    if "ActiveProfile" in changed:
+        apply_profile(str(changed["ActiveProfile"]))
+
+
+def main():
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+    bus = dbus.SystemBus()
+
+    try:
+        proxy = bus.get_object(BUS_NAME, OBJ_PATH)
+        props = dbus.Interface(proxy, "org.freedesktop.DBus.Properties")
+        current = str(props.Get(IFACE, "ActiveProfile"))
+    except dbus.DBusException as e:
+        log("error: cannot reach %s: %s" % (BUS_NAME, e))
+        return 1
+
+    log("clevo-profile-sync started (mapping: %s)" %
+        ", ".join("%s->%s" % (k, v) for k, v in sorted(MAPPING.items())))
+
+    # 启动时先对齐一次
+    apply_profile(current)
+
+    bus.add_signal_receiver(
+        on_properties_changed,
+        dbus_interface="org.freedesktop.DBus.Properties",
+        signal_name="PropertiesChanged",
+        bus_name=BUS_NAME,
+        path_keyword="path",
+    )
+
+    GLib.MainLoop().run()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

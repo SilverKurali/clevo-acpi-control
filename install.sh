@@ -27,12 +27,13 @@ step() { printf '\n\033[1m[%s]\033[0m %s\n' "$1" "$2"; }
 # ─────────────────────────────── 卸载 ───────────────────────────────
 if [ "${1:-}" = "--uninstall" ]; then
     step 1 "停止并移除服务"
+    systemctl disable --now clevo-profile-sync 2>/dev/null
     systemctl disable --now clevo-acpi-control 2>/dev/null
-    rm -f "$SYSTEMD_DIR/clevo-acpi-control.service"
+    rm -f "$SYSTEMD_DIR/clevo-profile-sync.service" "$SYSTEMD_DIR/clevo-acpi-control.service"
     systemctl daemon-reload 2>/dev/null
 
     step 2 "移除文件"
-    rm -f "$BINDIR/clevo-acpi-control" "$BINDIR/clevo"
+    rm -f "$BINDIR/clevo-acpi-control" "$BINDIR/clevo" "$BINDIR/clevo-profile-sync"
     rm -f "$DESKTOP_DIR/clevo-acpi-control.desktop"
     rm -f "$SUDOERS_FILE" "$CONF_FILE"
 
@@ -101,8 +102,10 @@ fi
 step 2 "安装主程序"
 install -Dm755 "$SRC_DIR/src/clevo-acpi-control" "$BINDIR/clevo-acpi-control"
 install -Dm755 "$SRC_DIR/src/clevo"              "$BINDIR/clevo"
+install -Dm755 "$SRC_DIR/src/clevo-profile-sync" "$BINDIR/clevo-profile-sync"
 grn "  ✓ $BINDIR/clevo-acpi-control"
-grn "  ✓ $BINDIR/clevo  （中文菜单）"
+grn "  ✓ $BINDIR/clevo  （交互菜单 / interactive menu）"
+grn "  ✓ $BINDIR/clevo-profile-sync  （桌面电源模式同步）"
 
 # ---------- 3. 免密码 ----------
 step 3 "配置免密码（只允许这两个程序）"
@@ -124,21 +127,29 @@ install -Dm644 "$SRC_DIR/desktop/clevo-acpi-control.desktop" \
     "$DESKTOP_DIR/clevo-acpi-control.desktop"
 grn "  ✓ 应用菜单里会出现「Clevo 性能控制」"
 
-# ---------- 5. 开机自动应用 ----------
-step 5 "安装开机自动应用服务（可选）"
+# ---------- 5. 服务 ----------
+step 5 "安装 systemd 服务"
 if [ ! -f "$CONF_FILE" ]; then
-    cat > "$CONF_FILE" <<'EOF'
-# 开机时自动应用的性能档位
-# 可选：quiet / saving / entertainment / performance
-# 不想开机自动切换就把下面这行注释掉
-MODE=entertainment
-EOF
+    install -Dm644 "$SRC_DIR/config/clevo-acpi-control.conf" "$CONF_FILE"
+    grn "  ✓ 配置文件： $CONF_FILE"
+else
+    echo "  配置文件已存在，保留： $CONF_FILE"
 fi
+
+install -Dm644 "$SRC_DIR/systemd/clevo-profile-sync.service" \
+    "$SYSTEMD_DIR/clevo-profile-sync.service"
 install -Dm644 "$SRC_DIR/systemd/clevo-acpi-control.service" \
     "$SYSTEMD_DIR/clevo-acpi-control.service"
 systemctl daemon-reload 2>/dev/null
-grn "  ✓ 已安装（默认未启用）"
-echo "     要启用： sudo systemctl enable --now clevo-acpi-control"
+
+grn "  ✓ clevo-profile-sync  — 跟随桌面电源模式自动切档（推荐）"
+grn "  ✓ clevo-acpi-control  — 开机固定切到某个档（备用）"
+echo
+echo "  推荐启用「跟随桌面电源模式」："
+echo "      sudo systemctl enable --now clevo-profile-sync"
+echo
+echo "  启用后，右上角的电源模式就同时管 CPU 和固件档位了。"
+echo "  两个服务不要同时启用（会互相覆盖）。"
 
 # ---------- 完成 ----------
 echo

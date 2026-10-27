@@ -206,7 +206,7 @@ sudo systemctl enable --now clevo-acpi-control
 - [x] **真机验证成功：GPU 功耗上限 85 W → 115 W**
 - [x] 四档实测（CPU PL1 15/15/45/90 W）
 - [x] 一键安装脚本 + 中文交互菜单 + 桌面图标
-- [ ] D-Bus 集成（让 GNOME 电源模式驱动固件档位）
+- [x] **D-Bus 集成 —— 桌面电源模式直接驱动固件档位**
 - [ ] 风扇转速读取
 
 ### ✅ 实测结果

@@ -225,7 +225,40 @@ journalctl -u nvidia-powerd -n 5
 You should see `Current Power Limit` rise above the default, and fan speed change
 (the EC profile changed too).
 
-### Apply at boot (optional)
+### Desktop integration — one switch for both layers (recommended)
+
+The desktop power mode and the firmware profile are **independent** by default:
+the desktop switch only touches the CPU governor, and the firmware profile only
+changes when you run this tool.
+
+Enabling the sync service joins them:
+
+```bash
+sudo systemctl enable --now clevo-profile-sync
+```
+
+| Desktop power mode | Firmware profile | CPU PL1 | GPU limit |
+|---|---|---|---|
+| Power Saver | quiet (0) | 15 W | 85 W |
+| Balanced | entertainment (3) | 45 W | 85 W |
+| Performance | performance (2) | **90 W** | **115 W** |
+
+Now changing the power mode in the top-right menu changes the firmware profile too —
+fan curve, CPU power limit and GPU TGP all follow.
+
+The mapping is configurable in `/etc/clevo-acpi-control.conf`:
+
+```ini
+PROFILE_POWER_SAVER=quiet
+PROFILE_BALANCED=entertainment
+PROFILE_PERFORMANCE=performance
+```
+
+It listens on `net.hadess.PowerProfiles` (provided by `power-profiles-daemon` or
+`tuned-ppd` — Fedora 41+ uses the latter), so it works on GNOME, KDE and any
+desktop that implements that interface.
+
+### Apply a fixed profile at boot (alternative)
 
 ```bash
 # edit /etc/clevo-acpi-control.conf to pick the profile, then:
@@ -270,7 +303,7 @@ disabled — the TGP increase is only observable on AC power. This is by design.
 - [x] **Hardware-verified: GPU power limit 85 W → 115 W**
 - [x] All four profiles measured
 - [x] One-command install + interactive menu + desktop entry
-- [ ] D-Bus integration (let GNOME's power mode drive the firmware profile)
+- [x] **D-Bus integration — desktop power mode drives the firmware profile**
 - [ ] Fan RPM readout
 
 ---

@@ -1,0 +1,17 @@
+[Unit]
+Description=Clevo firmware performance profile sync (follows desktop power mode)
+Documentation=https://github.com/SilverKurali/clevo-acpi-control
+After=tuned-ppd.service power-profiles-daemon.service
+Wants=tuned-ppd.service power-profiles-daemon.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStartPre=/sbin/modprobe acpi_call
+ExecStart=/usr/local/bin/clevo-profile-sync
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=graphical.target
