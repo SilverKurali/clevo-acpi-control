@@ -46,7 +46,19 @@
 
 ## 3. 环境状态（重要！）
 
-### 3.1 `acpi_call` 模块
+### 3.1 `acpi_call` 模块（已改为 DKMS）
+
+**2026-10-27 更新：已配置 DKMS，内核升级会自动重编。**
+
+```
+DKMS 包:  acpi_call/0.1.0
+源码:     /usr/src/acpi_call-0.1.0/   （含现代内核补丁）
+自动重编: /usr/lib/kernel/install.d/40-dkms.install + dkms.service
+状态查询: dkms status
+手动重编: sudo dkms autoinstall
+```
+
+以下为旧的手动方式，仅在 DKMS 不可用时使用：
 
 ```
 源码:   /tmp/acpi_call/           ← /tmp 可能被清理，重启后大概率没了

@@ -143,12 +143,12 @@ On a COLORFUL P15 23, **on AC power**, after `set performance`:
 
 ## Install
 
-Requires the `acpi_call` kernel module. Fedora users can use the DKMS package
-[MiMillieuh/acpi_call-fedora](https://github.com/MiMillieuh/acpi_call-fedora);
-Debian/Ubuntu users `sudo apt install acpi-call-dkms`.
+Requires the `acpi_call` kernel module. **The installer sets it up through DKMS**,
+so kernel updates rebuild it automatically — you never have to think about it again.
 
-The installer builds the module automatically if needed (kernel 5.6+ needs the
-patch in `patches/` — the upstream code is from 2013 and does not compile).
+The installer clones the upstream source, applies the patch in `patches/` (the
+upstream code is from 2013 and does not compile on kernel ≥ 5.6), and registers
+it with DKMS. If DKMS is unavailable it falls back to a prebuilt module.
 
 ```bash
 git clone https://github.com/SilverKurali/clevo-acpi-control.git
@@ -162,7 +162,7 @@ What it installs:
 |---|---|
 | `/usr/local/bin/clevo-acpi-control` | CLI tool |
 | `/usr/local/bin/clevo` | interactive menu |
-| `/lib/modules/$(uname -r)/extra/acpi_call.ko` | kernel module |
+| DKMS package `acpi_call/0.1.0` | kernel module, auto-rebuilt on kernel updates |
 | `/etc/modules-load.d/clevo-acpi-control.conf` | load module at boot |
 | `/etc/sudoers.d/clevo-acpi-control` | passwordless for these two binaries only |
 | `/usr/share/applications/clevo-acpi-control.desktop` | app-menu entry |

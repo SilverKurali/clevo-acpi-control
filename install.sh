@@ -54,48 +54,70 @@ grn "═════════════════════════
 echo "  当前用户：$REAL_USER"
 echo "  内核版本：$(uname -r)"
 
-# ---------- 1. 内核模块 ----------
-step 1 "安装 acpi_call 内核模块"
+# ---------- 1. 内核模块（DKMS，内核升级自动重编） ----------
+step 1 "安装 acpi_call 内核模块（DKMS）"
 
-if lsmod | grep -q '^acpi_call'; then
-    grn "  ✓ 模块已加载"
+DKMS_VER=0.1.0
+DKMS_SRC="/usr/src/acpi_call-$DKMS_VER"
+
+if dkms status 2>/dev/null | grep -q "^acpi_call/$DKMS_VER"; then
+    grn "  ✓ DKMS 已安装（acpi_call/$DKMS_VER）"
+    dkms autoinstall -m acpi_call -v "$DKMS_VER" >/dev/null 2>&1 || true
 else
-    KO="$SRC_DIR/patches/acpi_call.ko"
-    if [ -f "$KO" ] && insmod "$KO" 2>/dev/null; then
-        grn "  ✓ 预编译模块加载成功"
-    else
-        ylw "  预编译模块与本内核不匹配，尝试重新编译..."
+    if ! command -v dkms >/dev/null; then
+        ylw "  未安装 dkms，尝试安装..."
+        if command -v dnf >/dev/null; then dnf install -y dkms >/dev/null 2>&1
+        elif command -v apt-get >/dev/null; then apt-get install -y dkms >/dev/null 2>&1
+        fi
+    fi
+
+    if command -v dkms >/dev/null; then
+        # 准备源码：上游 acpi_call + 现代内核补丁
         BUILD=$(mktemp -d)
         if ! command -v make >/dev/null || [ ! -d "/usr/src/kernels/$(uname -r)" ]; then
-            red "  ✗ 缺少编译工具。请先安装："
-            echo "      sudo dnf install -y kernel-devel make gcc git"
-            rm -rf "$BUILD"
-            exit 1
+            red "  ✗ 缺少编译工具，请先安装："
+            echo "      sudo dnf install -y kernel-devel make gcc git dkms"
+            rm -rf "$BUILD"; exit 1
         fi
         if ! git clone -q --depth 1 https://github.com/mkottman/acpi_call "$BUILD/src" 2>/dev/null; then
             red "  ✗ 无法下载 acpi_call 源码（检查网络）"
             rm -rf "$BUILD"; exit 1
         fi
-        ( cd "$BUILD/src" \
-          && git apply "$SRC_DIR/patches/acpi_call-modern-kernel.patch" \
-          && make ) >/dev/null 2>&1
-        if [ -f "$BUILD/src/acpi_call.ko" ] && insmod "$BUILD/src/acpi_call.ko" 2>/dev/null; then
-            cp "$BUILD/src/acpi_call.ko" "$SRC_DIR/patches/acpi_call.ko"
-            grn "  ✓ 编译并加载成功"
-        else
-            red "  ✗ 编译失败。请把上面的错误发出来。"
-            rm -rf "$BUILD"; exit 1
-        fi
+        git -C "$BUILD/src" apply "$SRC_DIR/patches/acpi_call-modern-kernel.patch" 2>/dev/null || true
+        cp "$SRC_DIR/kmod/Makefile.acpi_call" "$BUILD/src/Makefile"
+
+        rm -rf "$DKMS_SRC"
+        mkdir -p "$DKMS_SRC"
+        cp "$BUILD/src/acpi_call.c" "$BUILD/src/Makefile" "$DKMS_SRC/"
+        cp "$SRC_DIR/kmod/dkms.conf" "$DKMS_SRC/"
         rm -rf "$BUILD"
+
+        if dkms add    -m acpi_call -v "$DKMS_VER" >/dev/null 2>&1 \
+           && dkms build -m acpi_call -v "$DKMS_VER" >/dev/null 2>&1 \
+           && dkms install -m acpi_call -v "$DKMS_VER" --force >/dev/null 2>&1; then
+            grn "  ✓ DKMS 安装成功（内核升级会自动重编）"
+        else
+            red "  ✗ DKMS 构建失败。手动排查： dkms build -m acpi_call -v $DKMS_VER"
+            exit 1
+        fi
+    else
+        ylw "  dkms 不可用，回退到预编译模块"
+        KO="$SRC_DIR/patches/acpi_call.ko"
+        [ -f "$KO" ] || { red "  ✗ 找不到预编译模块"; exit 1; }
+        install -Dm644 "$KO" "/lib/modules/$(uname -r)/extra/acpi_call.ko"
+        depmod -a 2>/dev/null
+        ylw "  ⚠ 此方式在内核升级后会失效，需要重新运行本脚本"
     fi
 fi
 
-mkdir -p "$MODDIR"
-if [ -f "$SRC_DIR/patches/acpi_call.ko" ]; then
-    cp "$SRC_DIR/patches/acpi_call.ko" "$MODDIR/acpi_call.ko"
-    depmod -a 2>/dev/null
-    echo "acpi_call" > /etc/modules-load.d/clevo-acpi-control.conf
-    grn "  ✓ 已设为开机自动加载"
+# 确保已加载 + 开机自动加载
+modprobe acpi_call 2>/dev/null || true
+echo "acpi_call" > /etc/modules-load.d/clevo-acpi-control.conf
+if [ -e /proc/acpi/call ]; then
+    grn "  ✓ 模块已加载，/proc/acpi/call 就绪"
+else
+    red "  ✗ 模块加载失败"
+    exit 1
 fi
 
 # ---------- 2. 主程序 ----------

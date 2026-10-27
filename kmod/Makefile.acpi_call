@@ -1,0 +1,13 @@
+obj-m := acpi_call.o
+
+# KVER 可由外部指定（DKMS 传 ${kernelver}），否则用当前运行内核
+KVER ?= $(shell uname -r)
+KDIR ?= /lib/modules/$(KVER)/build
+
+all:
+	$(MAKE) -C $(KDIR) M=$(PWD) modules
+
+clean:
+	$(MAKE) -C $(KDIR) M=$(PWD) clean
+
+.PHONY: all clean
