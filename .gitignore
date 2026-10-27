@@ -8,3 +8,15 @@ dist/
 *.o
 *.mod
 *.mod.c
+
+# kernel module build artifacts
+*.ko
+*.o
+*.mod
+*.mod.c
+*.cmd
+.*.cmd
+modules.order
+Module.symvers
+..module-common.o
+.tmp_versions/
