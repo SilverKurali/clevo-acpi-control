@@ -204,7 +204,11 @@ apply_mode() {
     fi
     sleep 1
     read_state
-    echo "  $(t switched) 「${label}」"
+    if [ "$LANG_CODE" = "zh" ]; then
+        echo "  $(t switched) 「${label}」"
+    else
+        echo "  $(t switched) ${label}"
+    fi
     echo "    $(t cpu_lim): ${CPU_PL1} W"
     echo "    $(t gpu_lim): ${GPU_PL} W"
     echo
