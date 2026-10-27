@@ -143,6 +143,14 @@ cd acpi_call && make && sudo make install
 
 ## 使用
 
+### 图形界面
+
+应用菜单 → **Clevo 性能控制**（或在终端运行 `clevo`）。数字菜单，不用记命令：
+
+![交互菜单](docs/images/menu-zh.png)
+
+### 命令行
+
 ```bash
 sudo modprobe acpi_call
 
@@ -158,6 +166,10 @@ sudo ./src/clevo-acpi-control set performance --dry-run
 # 真正切换
 sudo ./src/clevo-acpi-control set performance
 ```
+
+状态输出长这样：
+
+![status 输出](docs/images/status-zh.png)
 
 ### 验证是否生效
 

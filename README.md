@@ -184,6 +184,8 @@ sudo ./install.sh --uninstall
 App menu → **Clevo Performance Control** (or run `clevo` in a terminal).
 A numbered menu, no commands to memorise:
 
+![Interactive menu](docs/images/menu-en.png)
+
 ```
   ╔══════════════════════════════════════════╗
   ║          Clevo Performance Control       ║
@@ -206,6 +208,12 @@ A numbered menu, no commands to memorise:
 ```
 
 ### CLI
+
+```console
+$ sudo clevo-acpi-control status
+```
+
+![status output](docs/images/status-zh.png)
 
 ```bash
 sudo clevo-acpi-control status                    # read-only, safe
