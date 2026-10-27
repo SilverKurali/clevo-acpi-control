@@ -12,6 +12,38 @@ sudo clevo-acpi-control set performance
 
 ---
 
+## ⚠️ 适用机型（先看这个）
+
+### ✅ 仅适用于：七彩虹 COLORFUL **P15 / P16（2024 款）**
+
+| 机型 | 状态 |
+|---|---|
+| COLORFUL **P15**（DMI 报告 `P15 23`，BIOS `1.07.10COLO2` 2024-04-26） | ✅ **已完整实测** |
+| COLORFUL **P16**（2024 款） | ⚠️ 未实测，接口大概率相同 |
+
+### ❌ 其它机型不要用
+
+这套 `SCMD` 接口是 Clevo/Insyde 为七彩虹定制的。**在其它机器上调用可能写坏 EC 寄存器。**
+
+明确不适用（EC 与 ACPI 接口完全不同）：
+
+```
+MSI / ASUS / Lenovo / Dell / HP / Acer / Razer
+以及其它品牌的 Clevo/Tongfang 代工机型（XMG / Monster / Eluktronics / Sager …）
+```
+
+**先检测再动手**（只读，零风险）：
+
+```bash
+sudo clevo-acpi-control status
+```
+
+如果输出里 `PSF4` 读不出来、或者没有 `\_SB.WMI.SCMD` 接口，就说明不适用。
+
+> 工具本身也会检查 DMI 机型名，不是 P15/P16 时会警告并拒绝写入。
+
+---
+
 ## 它解决什么问题
 
 很多 Clevo/Tongfang 代工的笔记本（七彩虹、未来人类、XMG、Monster、Eluktronics…）

@@ -37,8 +37,25 @@ SUB_SET_MODE = 0x19
 CMD_GET_PSF4 = 0x60   # GCMD，不是 SCMD
 
 
+# 已知适用的机型（DMI product_name 前缀）
+SUPPORTED_MODELS = ("P15", "P16")
+
+
 class AcpiError(Exception):
     pass
+
+
+def detect_model():
+    """读 DMI 产品名，例如 'P15 23'。"""
+    try:
+        with open("/sys/class/dmi/id/product_name") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def model_supported(model):
+    return any(model.upper().startswith(m) for m in SUPPORTED_MODELS)
 
 
 def need_root():
@@ -144,6 +161,11 @@ def cmd_status(args):
     need_root()
     print("clevo-acpi-control — 状态\n")
 
+    model = detect_model()
+    ok = model_supported(model)
+    print("  机型            : %s  %s" % (model or "未知",
+          "✅ 适用" if ok else "⚠️ 不在已验证列表内（P15 / P16 2024 款）"))
+
     path, _ = detect_scmd()
     print("  SCMD 接口       : %s" % path)
 
@@ -210,7 +232,15 @@ def cmd_set(args):
         sys.exit("未知模式 %r。可用：%s" % (args.mode, ", ".join(MODES)))
     mid, label = MODES[args.mode]
 
+    model = detect_model()
+    if not model_supported(model) and not args.force:
+        sys.exit("\n⚠️  本机机型为 %r，不在已验证列表内。\n"
+                 "    本项目仅确认适用于 七彩虹 COLORFUL P15 / P16（2024 款）。\n"
+                 "    在其它机型上调用可能写坏 EC 寄存器。\n"
+                 "    确实要试的话加 --force，风险自负。" % (model or "未知"))
+
     path, raw = detect_scmd()
+    print("机型      : %s" % (model or "未知"))
     print("SCMD 接口 : %s  (探针返回 %s)" % (path, raw))
 
     psf4 = read_psf4()
