@@ -168,7 +168,38 @@ journalctl -u nvidia-powerd -n 5      # ERROR 那条应该消失
 
 同时风扇转速应明显变化（EC 的性能模式也切了）。
 
-### 开机自动应用
+### 桌面集成 —— 一个开关管两层（推荐）
+
+默认情况下，桌面电源模式和固件档位是**互不相干**的：右上角那个开关只改 CPU 降频策略，
+固件档位只在你运行本工具时才会变。
+
+启用同步服务，两者就合为一体：
+
+```bash
+sudo systemctl enable --now clevo-profile-sync
+```
+
+| 桌面电源模式 | 固件档位 | CPU 功耗 | 显卡上限 |
+|---|---|---|---|
+| 节能 | 安静 (0) | 15 W | 85 W |
+| 平衡 | 娱乐 (3) | 45 W | 85 W |
+| 性能 | 性能 (2) | **90 W** | **115 W** |
+
+**之后你只需要动右上角那一个开关** —— 风扇曲线、CPU 功耗上限、显卡 TGP 全部跟着变。
+
+映射可在 `/etc/clevo-acpi-control.conf` 里改：
+
+```ini
+PROFILE_POWER_SAVER=quiet
+PROFILE_BALANCED=entertainment
+PROFILE_PERFORMANCE=performance
+```
+
+它监听 `net.hadess.PowerProfiles`（由 `power-profiles-daemon` 或 `tuned-ppd` 提供，
+Fedora 41+ 用的是后者），所以 GNOME / KDE 以及任何实现了该接口的桌面都能用。
+
+### 开机固定切到某个档（备选）
+
 
 ```bash
 sudo install -m644 systemd/clevo-acpi-control.service /etc/systemd/system/
