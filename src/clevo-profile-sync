@@ -101,6 +101,33 @@ def on_properties_changed(interface, changed, invalidated, path=None):
         apply_profile(str(changed["ActiveProfile"]))
 
 
+def reapply_after_resume(bus):
+    """唤醒后重新应用。
+
+    固件在 _WAK 里会强制把 EC.CPCM 重置成 ECPM[EC返回值]（实测落到 3=娱乐档），
+    而桌面电源模式没变化，收不到 PropertiesChanged 信号。
+    所以必须在唤醒后主动重读桌面模式并重新下发。
+    """
+    global _last
+    try:
+        proxy = bus.get_object(BUS_NAME, OBJ_PATH)
+        props = dbus.Interface(proxy, "org.freedesktop.DBus.Properties")
+        current = str(props.Get(IFACE, "ActiveProfile"))
+        log("resumed, re-applying %s" % current)
+        _last = None          # 强制重发，即使模式没变
+        apply_profile(current)
+    except Exception as e:
+        log("resume reapply failed: %s" % e)
+    return False              # GLib.timeout_add 只跑一次
+
+
+def on_prepare_for_sleep(start, bus=None):
+    """logind 的 PrepareForSleep 信号：start=True 即将睡眠，False 刚唤醒。"""
+    if not start:
+        # 等几秒让 EC / 显卡驱动 / 桌面都稳定下来
+        GLib.timeout_add(3000, lambda: reapply_after_resume(bus))
+
+
 def main():
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
@@ -125,6 +152,14 @@ def main():
         signal_name="PropertiesChanged",
         bus_name=BUS_NAME,
         path_keyword="path",
+    )
+
+    # 唤醒后重新应用（固件 _WAK 会重置档位）
+    bus.add_signal_receiver(
+        lambda start: on_prepare_for_sleep(start, bus),
+        dbus_interface="org.freedesktop.login1.Manager",
+        signal_name="PrepareForSleep",
+        bus_name="org.freedesktop.login1",
     )
 
     GLib.MainLoop().run()
