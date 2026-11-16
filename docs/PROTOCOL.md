@@ -747,3 +747,80 @@ sudo modprobe clevo_fan
   `FanMode = buf[5]`、`FanOffset = buf[7]`
 - `oem.ini` 的档位定义：`FanMode` 0 Auto / 1 Max / 3 Silent / 5 MAXQ / 6 Custom；
   `SituationalMode` 0 Quiet / 1 power saving / 2 performance / 3 Entertainment
+
+## 19. 键盘背光：已确认的三条死路 + 一个通用 EC 邮箱工具
+
+> 状态：**未解决**。本机（COLORFUL P15 23，Insyde 固件）的键盘背光没有可从 Linux 触达的写入通道。
+> 下面把排除过程、上游公开协议、以及做出来的探测工具都记下来，方便以后从这儿接着走。
+
+### 19.1 DSDT 里的 RGB 字段是影子页，不是真寄存器
+
+`KLCR/KLCG/KLCB`、`KMCR/KMCG/KMCB`、`KRCR/KRCG/KRCB`、`KBBH` 在 `dsdt.dsl:101711-101720`
+（`OperationRegion (RAM3, SystemMemory, 0xFE0B0300, 0x100)` 的 `Offset(0x80)` 起）声明，
+`PK0D` 在 `dsdt.dsl:101888-101897` 与 `103122-103131` 读回它们。**全 DSDT 没有任何一处写入它们**
+（`grep 'EC\.KLCR ='` 零命中）。
+
+实测：把三区写成 `ff 00 00`、把 `KBBH` 写 200，`\_SB.WMI.PK0D 0 0 0` 能读回新值，
+但 **LED 完全不动**。原因：`0xFE0B0300` 页除了 `+0x80` 那段以外整片读回 `0xFF`，
+而真正有活数据的 EC RAM 在 `0xFE0B0100`（含 `0xCE/0xCF` 占空比、`0xD0-0xD3` 转速）。
+⇒ `0xFE0B0300` 是主机侧影子缓冲，EC 不消费它，`PK0D` 读到的 RGB 只是这个影子。
+
+### 19.2 EC 标准空间（0x00-0xFF）没有背光寄存器
+
+`/proc/ec_dump` 全 256 字节 × 145 帧（0.4 s/帧，80 秒）连续采样，期间只有 8 个寄存器变化：
+`0xCE/0xCF`（风扇占空比）、`0xD0-0xD3`（转速）、`0x07`（温度）、`0x32/0xDC/0x0A`（小幅）。
+没有任何字节表现为背光电平。EC 空间 `0x80-0x8A` 恒为 0。
+
+### 19.3 Windows 的写入路径在 ACPI 层被参数类型挡住
+
+`CC.other_Class.InsydeAcpiProt`（`LedKeyboardSetting.exe`，.NET）的写入口全部是
+`WriteAppSettings(cmd=2, index, buf, len)`，索引：`Status=0x50`(1B)、`LeftStatus=0x54`(1B)、
+`LeftColor=0x55`(3B R,G,B)，同构还有 Mid/Right/TP/Logo/LightBar 与 `Brightness`/`Mode`。
+
+调用链：`InsydeDCHU.dll!WriteAppSettings`（导出 RVA `0x3090`，打包 `buf[4..5]=cmd*256+index`、
+`buf[6..7]=len`、数据从 `buf[8]` 起，总长 `0x1008`）→ `DeviceIoControl(0x32240C)` →
+`AcpiBridge.sys`（Insyde Acpi Bridge Driver 1.0.0.7，82 KB，PDB
+`C:\Emmett\Clevo\acpi-bridge-driver\x64\Release\AcpiBridge.pdb`，导入 `IoWMIRegistrationControl`）。
+
+DSDT 侧唯一能碰任意 EC/内存地址的是 `Method (PK04)`（`dsdt.dsl:102264`，由 `_SB.DCHU._DSM`
+的 func `0x04` 经 `CC30` 分派），但它 `Arg2` 要求 **`Package{Buffer}`** —— `acpi_call` 的
+`/proc/acpi/call` 只能传整数与字符串，造不出 Package。`ECRD`/`ECWT`（`ECWT` 2 参数、`ECRD` 1 参数）
+看似有救，实际它们 `Arg0` 是 **Reference**（`DerefOf (Arg0)`），同样传不了。
+
+### 19.4 上游公开协议（对不上本机，但值得存档）
+
+Mainline `drivers/platform/x86/uniwill/uniwill-acpi.c` 覆盖 Clevo/同方 EC，键盘灯协议：
+
+| 寄存器 | 含义 |
+|---|---|
+| `0x0766` bit2 | `RGB_KEYBOARD` 能力位（`EC_ADDR_SUPPORT_2`） |
+| `0x0769/0x076A/0x076B` | R / G / B 三通道，0-255 |
+| `0x078C` bit7:5 | 亮度档位 0-4（`KBD_BRIGHTNESS`）；写 5-7 会被 EC 复位成 0 |
+| `0x078C` bit4 | `KBD_APPLY` |
+| `0x0767` bit5 | `RGB_APPLY_COLOR` 提交（`EC_ADDR_TRIGGER`） |
+
+写序列：写三色 → 读改写 `0x078C`（档位｜APPLY）→ `0x0767 |= bit5`。
+该驱动通过 ACPI 方法 **`ECRR`（读，1 整数）/ `ECRW`（写，2 整数）** 访问 16 位 EC 地址空间，
+本机 DSDT **没有这两个方法**，所以这套协议无法照搬。
+
+### 19.5 新增工具：`/proc/clevo_ecmd`（通用 EC 邮箱）
+
+`kmod/ecmd/clevo_ecmd.c`。完全按 DSDT `Method (ECMD)` 的时序驱动 EC 邮箱：
+
+- 寄存器：`FCMD=0xF8`、`FDAT=0xF9`、`FBUF=0xFA`、`FBF1=0xFB`、`FBF2=0xFC`、`FBF3=0xFD`
+- 时序：先写 `FDAT/FBUF/FBF1..FBF3`，**最后写 FCMD 触发**，`msleep` 后回读 6 字节
+- 用法：`echo "FCMD FDAT FBUF FBF1 FBF2 FBF3 STALL" | sudo tee /proc/clevo_ecmd`，`cat` 取回读
+- 已知命令字（来自 DSDT）：`0xB1`（16 位地址读，地址在 FDAT=hi / FBUF=lo）、
+  `0xC0`（按块读，FDAT=块号 0-3）、`0xC1`（LED 相关）、`0xC4`、`0xD7`、`0xB8`、`0xCA`、`0xCB`
+
+实测：向 `0x0760-0x0790` 逐个发 `0xB1` 读，**全部返回 0** ⇒ 本机 EC 没有 uniwill 那组寄存器。
+
+### 19.6 还没走的两条路
+
+1. **Windows 对照实验**（最快）：在 Windows 把灯设成纯红最亮 → 正常重启回 Fedora →
+   抓 EC 全表与 `0xFE0B0100/0xFE0B0300` 两页做差分，直接定位真寄存器。
+2. **继续静态反 `AcpiBridge.sys`**（不用 Windows）：82 KB 驱动，IOCTL 已在 `InsydeDCHU.dll`
+   侧定位到 `0x32240C`，顺着它的 IOCTL handler 可以看到 `(cmd=2, index)` 被翻译成哪个
+   ACPI 调用/EC 命令，再写内核模块用 `acpi_evaluate_object` 造 Package 直接调 `PK04`。
+   风险：若最终仍需写 BIOS NVRAM 共享区（`OGNS @ 0x33DD7018`，含 `WBL0..WBLA`/`ABL0..ABLA`），
+   属于改 BIOS 设置级别的操作，需谨慎。
