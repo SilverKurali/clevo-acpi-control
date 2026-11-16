@@ -250,7 +250,7 @@ sudo systemctl enable --now clevo-acpi-control
 - [x] 四档实测（CPU PL1 15/15/45/90 W）
 - [x] 一键安装脚本 + 中文交互菜单 + 桌面图标
 - [x] **D-Bus 集成 —— 桌面电源模式直接驱动固件档位**
-- [ ] 风扇转速读取
+- [x] **风扇转速读取 —— hwmon 驱动 `clevo_fan`，交互菜单与 `status` 直接显示，Vitals 等前端自动识别**
 
 ### ✅ 实测结果
 

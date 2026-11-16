@@ -94,6 +94,8 @@ S = {
  "bad_mode": "unknown mode {!r}. Available: {}",
  "model_warn": "\nWARNING: this machine reports model {!r}, which is not in the verified list.\n    This project is only confirmed on COLORFUL P15 / P16 (2024).\n    Calling it on another model may corrupt EC registers.\n    Use --force if you really want to try, at your own risk.",
  "available": "Available profiles:",
+ "fan": "Fan speed", "fan_cpu": "CPU", "fan_gpu": "GPU",
+ "fan_none": "not detected (clevo_fan module not loaded)",
 },
 "zh": {
  "model": "机型", "supported": "适用", "unsupported": "不在已验证列表内（P15 / P16 2024 款）",
@@ -132,6 +134,8 @@ S = {
  "bad_mode": "未知模式 {!r}。可用：{}",
  "model_warn": "\n⚠️  本机机型为 {!r}，不在已验证列表内。\n    本项目仅确认适用于 七彩虹 COLORFUL P15 / P16（2024 款）。\n    在其它机型上调用可能写坏 EC 寄存器。\n    确实要试的话加 --force，风险自负。",
  "available": "可用模式：",
+ "fan": "风扇转速", "fan_cpu": "CPU", "fan_gpu": "显卡",
+ "fan_none": "未检测到（clevo_fan 模块未加载）",
 },
 }
 
@@ -166,6 +170,27 @@ def T(key, *args):
 
 class AcpiError(Exception):
     pass
+
+
+def read_fans():
+    """从 clevo_fan hwmon 驱动读风扇转速，返回 (cpu, gpu)，缺失为 None。"""
+    import glob
+    for d in sorted(glob.glob("/sys/class/hwmon/hwmon*")):
+        try:
+            with open(os.path.join(d, "name")) as f:
+                if f.read().strip() != "clevo_fan":
+                    continue
+        except OSError:
+            continue
+        out = []
+        for idx in (1, 2):
+            try:
+                with open(os.path.join(d, "fan%d_input" % idx)) as f:
+                    out.append(int(f.read().strip()))
+            except (OSError, ValueError):
+                out.append(None)
+        return out[0], out[1]
+    return None, None
 
 
 def detect_model():
@@ -298,6 +323,14 @@ def cmd_status(args):
         else:
             mark = "--  " + T("not_authorized")
         print("    %-6s = %-6s %s" % (key, "?" if v is None else "0x%X" % v, mark))
+
+    fan_cpu, fan_gpu = read_fans()
+    if fan_cpu is None and fan_gpu is None:
+        print("  %s: %s" % (pad(T("fan"), 16), T("fan_none")))
+    else:
+        print("  %s: %s %s / %s %s RPM" % (
+            pad(T("fan"), 16), T("fan_cpu"), fan_cpu if fan_cpu is not None else "?",
+            T("fan_gpu"), fan_gpu if fan_gpu is not None else "?"))
 
     print("\n  " + "-" * 46)
     if gate is False:

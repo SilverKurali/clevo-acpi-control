@@ -680,3 +680,70 @@ ffffffff9ed68450 T ec_write
 
 16 线程满载 60 秒，封装温度稳定在 **74–76 °C**（性能档，PL1 90 W）。
 说明散热模组在 90 W 下仍有余量，未触及 100 °C 的 TJmax。
+
+---
+
+## 18. ✅ 风扇转速已解决（2026-11-16）
+
+§17 的「ACPI 不提供转速」结论**已被推翻**。之前搜 `_FST`/`_FSL`/`_FIF`/`FAN`/`RPM`
+零结果，是因为搜的是**方法名**；实际 `RPM1`/`RPM2`/`RPM3`/`RPM4` 是 **DSDT 里的字段名**：
+
+- `dsdt.dsl:100200` 声明 `RPM1, 16` / `RPM2, 16` / `RPM4, 16`
+- `dsdt.dsl:100213` 声明 `RPM3, 16`
+- EC 偏移：**`0xD0` RPM1、`0xD2` RPM2、`0xD4` RPM4、`0xE0` RPM3**（`0xCE` DUT1、`0xCF` DUT2 是占空比）
+- `Method (PK0C)`（`dsdt.dsl:101801`）把 RPM1/RPM2/RPM3 写进 WMI 返回包 `W001`/`W002`/`W003`（字节偏移 `0x02`/`0x04`/`0x06`）
+
+### 18.1 编码与换算（来自官方程序，非猜测）
+
+官方 Windows 组件 `FanSpeedSetting.exe`（.NET 4.6.1，3.93.0.0）经 Insyde DCHU
+`GetDCHU_Data_Buffer(12, buf)` 取回 EC 块，然后：
+
+```csharp
+// FanSpeedSetting.FAN.Read_FanSpeed
+Fan_CPU.rpm  = buf[3] | (buf[2] << 8);   // 16 位大端
+Fan_GPU1.rpm = buf[5] | (buf[4] << 8);
+Fan_GPU2.rpm = buf[7] | (buf[6] << 8);
+Fan_CPU.duty = buf[16];  // 及 buf[19] / buf[22]
+
+// FanSpeedSetting.Page_system_monitor.UpdateUI_CPUFan
+if (raw != 0)
+    rpm = Math.Round(60.0 / (5.565217391304348e-05 * raw) * 2.0);
+```
+
+即 **`RPM = round(2156250 / raw)`**，`raw` 是 **EC 0xD0/0xD1（16 位大端）的原始计数**。
+它是 tach 周期计数，所以 **raw 变小 = 转速变快**（§17.3 里「占空比升、数值降」的矛盾由此解释）。
+
+`raw == 0` 时官方程序保持上一次显示值（风扇停转）。
+
+### 18.2 实测
+
+16 线程满载 45 秒：占空比 `0xCE/0xCF` 由 180/204 升到 255/255，`raw` 由 420/395 降到
+324/336 并稳定 ⇒ 换算后 **CPU 风扇 5.1k → 6.7k RPM**。停机后两分钟内回落：
+`5445 → 4300`（CPU）、`5234 → 3180`（GPU），与占空比同步下降。
+
+### 18.3 hwmon 驱动（供 Vitals 等前端显示）
+
+`kmod/hwmon/clevo_fan.c`（DKMS 包名 `clevo_fan`，自动随内核升级重编）：
+
+```bash
+cd kmod/hwmon && sudo dkms add . && sudo dkms build clevo_fan/0.1.0 && sudo dkms install clevo_fan/0.1.0
+sudo modprobe clevo_fan
+# 或开机自载： echo clevo_fan | sudo tee /etc/modules-load.d/clevo-fan.conf
+```
+
+暴露 `/sys/class/hwmon/hwmonN/fan1_input`（label `cpu`）与 `fan2_input`（label `gpu`），
+只读。读 16 位值时做三次夹读防撕裂。标定分子可用模块参数覆盖：
+`sudo modprobe clevo_fan rpm_num=2156250`。
+
+配套查看工具：`faninfo`（在 `~/.local/bin`，`--json` 输出结构化数据）。
+
+### 18.4 顺带解出的控制接口
+
+- `PK0D`：读键盘 RGB（`0x02` 起三组 RGB、`0x0B` 背光）、`FANQ` 风扇路数（本机 2）、
+  各风扇 T/D 曲线表（**T、D 逐项交错**：T1,D1,T2,D2…，本机 CPU 40/63,60/91,80/135,100/255）
+- `PK0E`：**写**方向，把自定义转速/曲线下发到 `F1R1-3`/`F2R1-3`/`F3R1-3`
+- `FAN.Read_FanInfo` 用 `GetWMIPackage(13)` 取 `FanCount = buf[12]`、`buf[43]` 位判断
+  是否支持自定义曲线；`GetAPPData(4,0,256)` 取 `InitFanMode = buf[4]`、
+  `FanMode = buf[5]`、`FanOffset = buf[7]`
+- `oem.ini` 的档位定义：`FanMode` 0 Auto / 1 Max / 3 Silent / 5 MAXQ / 6 Custom；
+  `SituationalMode` 0 Quiet / 1 power saving / 2 performance / 3 Entertainment

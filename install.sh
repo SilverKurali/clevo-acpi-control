@@ -37,7 +37,10 @@ if [ "${1:-}" = "--uninstall" ]; then
     rm -f "$DESKTOP_DIR/clevo-acpi-control.desktop"
     rm -f "$SUDOERS_FILE" "$CONF_FILE"
 
-    step 3 "卸载内核模块"
+    step 3 "卸载内核模块（含 clevo_fan）"
+    dkms remove -m clevo_fan -v 0.1.0 --all >/dev/null 2>&1 || true
+    rm -f /etc/modules-load.d/clevo-fan.conf
+    modprobe -r clevo_fan 2>/dev/null
     modprobe -r acpi_call 2>/dev/null
     rm -f "$MODDIR/acpi_call.ko"
     depmod -a 2>/dev/null
@@ -118,6 +121,30 @@ if [ -e /proc/acpi/call ]; then
 else
     red "  ✗ 模块加载失败"
     exit 1
+fi
+
+# ---------- 1b. 风扇转速 hwmon 模块（DKMS） ----------
+step "1b" "安装 clevo_fan 风扇转速模块（DKMS）"
+
+FAN_VER=0.1.0
+FAN_SRC="$SRC_DIR/kmod/hwmon"
+
+if [ -d "$FAN_SRC" ] && command -v dkms >/dev/null; then
+    if dkms status 2>/dev/null | grep -q "^clevo_fan/$FAN_VER"; then
+        grn "  ✓ DKMS 已安装（clevo_fan/$FAN_VER）"
+        dkms autoinstall -m clevo_fan -v "$FAN_VER" >/dev/null 2>&1 || true
+    else
+        if dkms add -m clevo_fan -v "$FAN_VER" -s "$FAN_SRC" >/dev/null 2>&1 \
+           || dkms add "$FAN_SRC" >/dev/null 2>&1; then
+            dkms build   -m clevo_fan -v "$FAN_VER" >/dev/null 2>&1 || true
+            dkms install -m clevo_fan -v "$FAN_VER" >/dev/null 2>&1 || true
+        fi
+    fi
+    echo clevo_fan > /etc/modules-load.d/clevo-fan.conf
+    modprobe clevo_fan 2>/dev/null && grn "  ✓ clevo_fan 已加载" \
+        || ylw "  ! clevo_fan 加载失败，稍后可手动 modprobe clevo_fan"
+else
+    ylw "  ! 跳过：缺少 $FAN_SRC 或 dkms"
 fi
 
 # ---------- 2. 主程序 ----------

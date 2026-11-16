@@ -82,6 +82,11 @@ t() {
             p_perf)     echo "性能" ;;
             p_ent)      echo "娱乐（平衡）" ;;
             p_unk)      echo "未知" ;;
+            fan)        echo "风扇转速" ;;
+            fan_cpu)    echo "CPU" ;;
+            fan_gpu)    echo "显卡" ;;
+            fan_rpm)    echo "RPM" ;;
+            fan_none)   echo "未检测到（clevo_fan 模块未加载）" ;;
         esac
     else
         case "$k" in
@@ -115,6 +120,11 @@ t() {
             p_perf)     echo "performance" ;;
             p_ent)      echo "entertainment (balanced)" ;;
             p_unk)      echo "unknown" ;;
+            fan)        echo "Fan speed" ;;
+            fan_cpu)    echo "CPU" ;;
+            fan_gpu)    echo "GPU" ;;
+            fan_rpm)    echo "RPM" ;;
+            fan_none)   echo "not detected (clevo_fan module not loaded)" ;;
         esac
     fi
 }
@@ -130,6 +140,12 @@ if ! [ -e /proc/acpi/call ]; then
         exit 1
     fi
 fi
+
+# 风扇转速来自 clevo_fan hwmon 模块，缺了就试着加载（失败不影响主功能）
+for d in /sys/class/hwmon/hwmon*; do
+    [ "$(cat "$d/name" 2>/dev/null)" = "clevo_fan" ] && { FAN_LOADED=1; break; }
+done
+[ -z "${FAN_LOADED:-}" ] && modprobe clevo_fan 2>/dev/null
 
 if ! [ -x "$TOOL" ]; then
     echo "  $(t no_tool) $TOOL"
@@ -149,6 +165,14 @@ read_state() {
     GPU_PL=$(nvidia-smi -q -d POWER 2>/dev/null \
         | grep -m1 'Current Power Limit' | awk '{printf "%d", $5}')
     [ -z "${GPU_PL:-}" ] && GPU_PL="?"
+    FAN_CPU=""
+    FAN_GPU=""
+    for d in /sys/class/hwmon/hwmon*; do
+        [ "$(cat "$d/name" 2>/dev/null)" = "clevo_fan" ] || continue
+        FAN_CPU=$(cat "$d/fan1_input" 2>/dev/null)
+        FAN_GPU=$(cat "$d/fan2_input" 2>/dev/null)
+        break
+    done
     AC=$(cat /sys/class/power_supply/AC/online 2>/dev/null)
     BAT=$(cat /sys/class/power_supply/BAT0/capacity 2>/dev/null)
 }
@@ -182,6 +206,11 @@ draw_menu() {
     echo "     $(t cur_profile): $(profile_name "$CUR_MODE")"
     echo "     $(t cpu_lim): ${CPU_PL1} W"
     echo "     $(t gpu_lim): ${GPU_PL} W"
+    if [ -n "${FAN_CPU:-}" ] || [ -n "${FAN_GPU:-}" ]; then
+        echo "     $(t fan): $(t fan_cpu) ${FAN_CPU:-?} / $(t fan_gpu) ${FAN_GPU:-?} $(t fan_rpm)"
+    else
+        echo "     $(t fan): $(t fan_none)"
+    fi
     echo
     echo "  ──────────────────────────────────────────────────"
     echo
@@ -211,6 +240,9 @@ apply_mode() {
     fi
     echo "    $(t cpu_lim): ${CPU_PL1} W"
     echo "    $(t gpu_lim): ${GPU_PL} W"
+    if [ -n "${FAN_CPU:-}" ] || [ -n "${FAN_GPU:-}" ]; then
+        echo "    $(t fan): $(t fan_cpu) ${FAN_CPU:-?} / $(t fan_gpu) ${FAN_GPU:-?} $(t fan_rpm)"
+    fi
     echo
     read -rp "  $(t back)" _
 }

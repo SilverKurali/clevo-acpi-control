@@ -312,7 +312,7 @@ disabled — the TGP increase is only observable on AC power. This is by design.
 - [x] All four profiles measured
 - [x] One-command install + interactive menu + desktop entry
 - [x] **D-Bus integration — desktop power mode drives the firmware profile**
-- [ ] Fan RPM readout
+- [x] **Fan RPM readout — `clevo_fan` hwmon driver; shown in the menu and `status`, auto-detected by Vitals**
 
 ---
 
